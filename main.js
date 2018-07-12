@@ -33,7 +33,6 @@ ClubhouseEvent {
 const https = require('https');
 
 exports.handler = async (rawEvent) => {
-    console.log(rawEvent);
     const event/*ClubhouseEvent|GithubEvent*/ = JSON.parse(rawEvent.body);
     
     // Define the conditions that make a side effect actionable based on the action received from CH.
@@ -44,17 +43,28 @@ exports.handler = async (rawEvent) => {
                 && action.action === 'update'
                 && !!action.changes.workflow_state_id
             );
+        },
+        updateEpicWhenPullRequestIsOpened: (event) => {
+            return (
+                event.action === 'opened'
+                && (
+                    !!event.pull_request.title.match(/\[ch/gi)
+                    || !!event.pull_request.title.match(/\[\sch/gi)
+                )
+            );
         }
     };
 
     // Business logic.
-    if (!!getActionForSideEffect('updateEpicWhenStoryProgresses')) {
+    if (sideEffectIsActionable('updateEpicWhenStoryProgresses')) {
         const epicWorkflow = await getClubhouseResource('epic-workflow');
         const allEpics = await getClubhouseResource('epics');
         const epicTodoStateId = epicWorkflow.epic_states.find((state) => state.name === 'to do').id;
         const epicInProgressStateId = epicWorkflow.epic_states.find((state) => state.name === 'in progress').id;
+        const epicInQaStateId = epicWorkflow.epic_states.find((state) => state.name === 'qa').id;
         let idOfInProgressEpic = null;
         let idOfToDoEpic = null;
+
         allEpics.forEach((epic) => {
             if (epic.stats.num_stories_started > 0 || epic.stats.num_stories_done > 0) {
                 idOfInProgressEpic = epic.id;
@@ -77,6 +87,20 @@ exports.handler = async (rawEvent) => {
         }
     }
 
+    if (sideEffectIsActionable('updateEpicWhenPullRequestIsOpened')) {
+        const allWorkflows = await getClubhouseResource('workflows');
+        const storyReadyForReviewStateId = getClubhouseWorkflowStateId('ready for review', allWorkflows);
+        if (!!storyReadyForReviewStateId) {
+            const clubhouseStoryTag = event.pull_request.title.match(/\[(.*)\]/).pop();
+            const clubhouseStoryId = parseInt(clubhouseStoryTag.replace('ch', ''), 10);
+            const clubhouseStory = await getClubhouseResource(`stories/${clubhouseStoryId}`);
+    
+            if (!!clubhouseStory && !clubhouseStory.completed) {
+                await updateClubhouseResource(`stories/${clubhouseStoryId}`, { workflow_state_id: storyReadyForReviewStateId });
+            }
+        }
+    }
+
     // Helper functions.
     function getClubhouseResource(resourceKey) {
         return new Promise((resolve, reject) => {
@@ -89,6 +113,10 @@ exports.handler = async (rawEvent) => {
             }, (res) => {
                 res.on('data', (data) => {
                     resolve(JSON.parse(data.toString()));
+                });
+
+                res.on('error', (err) => {
+                    reject(err);
                 });
             });
         });
@@ -118,9 +146,32 @@ exports.handler = async (rawEvent) => {
         });
     }
 
-    function getActionForSideEffect(sideEffectKey) {
+    function sideEffectIsActionable(sideEffectKey) {
         const isActionableFn = sideEffectIsActionableFnMap[sideEffectKey];
-        return event.actions.find((action) => isActionableFn(action));
+
+        // For Clubhouse events.
+        if (!!event.actions) {
+            return !!event.actions.find((action) => isActionableFn(action));
+        }
+
+        // For Github events.
+        else if (!!event.pull_request) {
+            return isActionableFn(event);
+        }
+    }
+
+    function getClubhouseWorkflowStateId(workflowStateName, allWorkflows) {
+        return allWorkflows.reduce((stateId, currentWorkflow) => {
+            if (stateId != null) {
+                return stateId;
+            }
+            const inDevelopmentState = currentWorkflow.states.find((state) => state.name === workflowStateName);
+            if (!!inDevelopmentState) {
+                return inDevelopmentState.id;
+            } else {
+                return null;
+            }
+        }, null)
     }
     
     return event;
