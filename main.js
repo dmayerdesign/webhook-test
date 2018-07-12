@@ -33,12 +33,9 @@ ClubhouseEvent {
 const https = require('https');
 
 exports.handler = async (rawEvent) => {
-    const event/*ClubhouseEvent*/ = JSON.parse(rawEvent.body);
-    const epicWorkflow = await getClubhouseResource('epic-workflow');
-    const allEpics = await getClubhouseResource('epics');
-    const epicTodoStateId = epicWorkflow.epic_states.find((state) => state.name === 'to do').id;
-    const epicInProgressStateId = epicWorkflow.epic_states.find((state) => state.name === 'in progress').id;
-
+    console.log(rawEvent);
+    const event/*ClubhouseEvent|GithubEvent*/ = JSON.parse(rawEvent.body);
+    
     // Define the conditions that make a side effect actionable based on the action received from CH.
     const sideEffectIsActionableFnMap = {
         updateEpicWhenStoryProgresses: (action) => {
@@ -52,6 +49,10 @@ exports.handler = async (rawEvent) => {
 
     // Business logic.
     if (!!getActionForSideEffect('updateEpicWhenStoryProgresses')) {
+        const epicWorkflow = await getClubhouseResource('epic-workflow');
+        const allEpics = await getClubhouseResource('epics');
+        const epicTodoStateId = epicWorkflow.epic_states.find((state) => state.name === 'to do').id;
+        const epicInProgressStateId = epicWorkflow.epic_states.find((state) => state.name === 'in progress').id;
         let idOfInProgressEpic = null;
         let idOfToDoEpic = null;
         allEpics.forEach((epic) => {
